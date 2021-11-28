@@ -91,7 +91,13 @@ def search_videos(search_text: str) -> List[Video]:
     return results
 
 
-def add_video(cat_name: str, youtube_id: str, title: str, author: str, view_count: int):
+def add_video(
+    cat_name: str,
+    youtube_id: str,
+    title: str,
+    author: str,
+    view_count: int,
+):
     global __all_videos_list
 
     if video_by_id(youtube_id):
