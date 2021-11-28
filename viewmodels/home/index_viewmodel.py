@@ -12,7 +12,4 @@ class IndexViewModel(ViewModelBase):
         super().__init__()
 
         self.categories: List[Category] = video_service.all_categories()
-        self.rows = [
-            list(row)
-            for row in more_itertools.chunked(self.categories, 3)
-        ]
+        self.rows = [list(row) for row in more_itertools.chunked(self.categories, 3)]

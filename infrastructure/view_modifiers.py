@@ -7,7 +7,6 @@ import werkzeug.wrappers
 
 def response(*, mimetype: str = None, template_file: str = None):
     def response_inner(f):
-
         @wraps(f)
         def view_method(*args, **kwargs):
             response_val = f(*args, **kwargs)
@@ -25,7 +24,10 @@ def response(*, mimetype: str = None, template_file: str = None):
 
             if template_file and not isinstance(response_val, dict):
                 raise Exception(
-                    "Invalid return type {}, we expected a dict as the return value.".format(type(response_val)))
+                    "Invalid return type {}, we expected a dict as the return value.".format(
+                        type(response_val)
+                    )
+                )
 
             if template_file:
                 response_val = flask.render_template(template_file, **response_val)

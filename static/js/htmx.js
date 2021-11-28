@@ -1,7 +1,9 @@
 //AMD insanity
 (function (root, factory) {
+    //@ts-ignore
     if (typeof define === 'function' && define.amd) {
         // AMD. Register as an anonymous module.
+        //@ts-ignore
         define([], factory);
     } else {
         // Browser globals
@@ -35,7 +37,6 @@ return (function () {
             removeExtension : removeExtension,
             logAll : logAll,
             logger : null,
-            useTemplateFragments: false,
             config : {
                 historyEnabled:true,
                 historyCacheSize:10,
@@ -46,13 +47,17 @@ return (function () {
                 includeIndicatorStyles:true,
                 indicatorClass:'htmx-indicator',
                 requestClass:'htmx-request',
+                addedClass:'htmx-added',
                 settlingClass:'htmx-settling',
                 swappingClass:'htmx-swapping',
                 allowEval:true,
                 attributesToSettle:["class", "style", "width", "height"],
                 withCredentials:false,
+                timeout:0,
                 wsReconnectDelay: 'full-jitter',
                 disableSelector: "[hx-disable], [data-hx-disable]",
+                useTemplateFragments: false,
+                scrollBehavior: 'smooth',
             },
             parseInterval:parseInterval,
             _:internalEval,
@@ -61,7 +66,8 @@ return (function () {
             },
             createWebSocket: function(url){
                 return new WebSocket(url, []);
-            }
+            },
+            version: "1.6.1"
         };
 
         var VERBS = ['get', 'post', 'put', 'delete', 'patch'];
@@ -123,7 +129,9 @@ return (function () {
             getClosestMatch(elt, function (e) {
                 return closestAttr = getAttributeValue(e, attributeName);
             });
-            return closestAttr;
+            if (closestAttr !== "unset") {
+                return closestAttr;
+            }
         }
 
         function matches(elt, selector) {
@@ -150,9 +158,11 @@ return (function () {
             var responseNode = responseDoc.body;
             while (depth > 0) {
                 depth--;
+                // @ts-ignore
                 responseNode = responseNode.firstChild;
             }
             if (responseNode == null) {
+                // @ts-ignore
                 responseNode = getDocument().createDocumentFragment();
             }
             return responseNode;
@@ -319,7 +329,7 @@ return (function () {
             if (delay) {
                 setTimeout(function(){addClassToElement(elt, clazz);}, delay)
             } else {
-                elt.classList.add(clazz);
+                elt.classList && elt.classList.add(clazz);
             }
         }
 
@@ -328,7 +338,13 @@ return (function () {
             if (delay) {
                 setTimeout(function(){removeClassFromElement(elt, clazz);}, delay)
             } else {
-                elt.classList.remove(clazz);
+                if (elt.classList) {
+                    elt.classList.remove(clazz);
+                    // if there are no classes left, remove the class attribute
+                    if (elt.classList.length === 0) {
+                        elt.removeAttribute("class");
+                    }
+                }
             }
         }
 
@@ -364,13 +380,21 @@ return (function () {
                 return [closest(elt, selector.substr(8))];
             } else if (selector.indexOf("find ") === 0) {
                 return [find(elt, selector.substr(5))];
+            } else if (selector === 'document') {
+                return [document];
+            } else if (selector === 'window') {
+                return [window];
             } else {
                 return getDocument().querySelectorAll(selector);
             }
         }
 
         function querySelectorExt(eltOrSelector, selector) {
-            return querySelectorAllExt(eltOrSelector, selector)[0]
+            if (selector) {
+                return querySelectorAllExt(eltOrSelector, selector)[0];
+            } else {
+                return querySelectorAllExt(getDocument().body, eltOrSelector)[0];
+            }
         }
 
         function resolveTarget(arg2) {
@@ -540,6 +564,7 @@ return (function () {
 
         function makeAjaxLoadTask(child) {
             return function () {
+                removeClassFromElement(child, htmx.config.addedClass);
                 processNode(child);
                 processScripts(child);
                 processFocus(child)
@@ -559,6 +584,7 @@ return (function () {
             handleAttributes(parentNode, fragment, settleInfo);
             while(fragment.childNodes.length > 0){
                 var child = fragment.firstChild;
+                addClassToElement(child, htmx.config.addedClass);
                 parentNode.insertBefore(child, insertBefore);
                 if (child.nodeType !== Node.TEXT_NODE && child.nodeType !== Node.COMMENT_NODE) {
                     settleInfo.tasks.push(makeAjaxLoadTask(child));
@@ -696,14 +722,13 @@ return (function () {
             }
         }
 
-        var TITLE_FINDER = /<title>([\s\S]+?)<\/title>/im;
         function findTitle(content) {
-            if(content.indexOf('<title>') > -1 &&
-                (content.indexOf('<svg>') == -1 ||
-                    content.indexOf('<title>') < content.indexOf('<svg>'))) {
-                var result = TITLE_FINDER.exec(content);
+            if (content.indexOf('<title') > -1) {
+                var contentWithSvgsRemoved = content.replace(/<svg(\s[^>]*>|>)([\s\S]*?)<\/svg>/gim, '');
+                var result = contentWithSvgsRemoved.match(/<title(\s[^>]*>|>)([\s\S]*?)<\/title>/im);
+
                 if (result) {
-                    return result[1];
+                    return result[2];
                 }
             }
         }
@@ -853,7 +878,12 @@ return (function () {
                         if (trigger === "every") {
                             var every = {trigger: 'every'};
                             consumeUntil(tokens, NOT_WHITESPACE);
-                            every.pollInterval = parseInterval(consumeUntil(tokens, WHITESPACE));
+                            every.pollInterval = parseInterval(consumeUntil(tokens, /[,\[\s]/));
+                            consumeUntil(tokens, NOT_WHITESPACE);
+                            var eventFilter = maybeGenerateConditional(elt, tokens, "event");
+                            if (eventFilter) {
+                                every.eventFilter = eventFilter;
+                            }
                             triggerSpecs.push(every);
                         } else if (trigger.indexOf("sse:") === 0) {
                             triggerSpecs.push({trigger: 'sse', sseEvent: trigger.substr(4)});
@@ -877,7 +907,17 @@ return (function () {
                                     triggerSpec.delay = parseInterval(consumeUntil(tokens, WHITESPACE_OR_COMMA));
                                 } else if (token === "from" && tokens[0] === ":") {
                                     tokens.shift();
-                                    triggerSpec.from = consumeUntil(tokens, WHITESPACE_OR_COMMA);
+                                    let from_arg = consumeUntil(tokens, WHITESPACE_OR_COMMA);
+                                    if (from_arg === "closest" || from_arg === "find") {
+                                        tokens.shift();
+                                        from_arg +=
+                                            " " +
+                                            consumeUntil(
+                                                tokens,
+                                                WHITESPACE_OR_COMMA
+                                            );
+                                    }
+                                    triggerSpec.from = from_arg;
                                 } else if (token === "target" && tokens[0] === ":") {
                                     tokens.shift();
                                     triggerSpec.target = consumeUntil(tokens, WHITESPACE_OR_COMMA);
@@ -919,14 +959,16 @@ return (function () {
             getInternalData(elt).cancelled = true;
         }
 
-        function processPolling(elt, verb, path, interval) {
+        function processPolling(elt, verb, path, spec) {
             var nodeData = getInternalData(elt);
             nodeData.timeout = setTimeout(function () {
                 if (bodyContains(elt) && nodeData.cancelled !== true) {
-                    issueAjaxRequest(verb, path, elt);
-                    processPolling(elt, verb, getAttributeValue(elt, "hx-" + verb), interval);
+                    if (!maybeFilterEvent(spec, makeEvent('hx:poll:trigger', {triggerSpec:spec}))) {
+                        issueAjaxRequest(verb, path, elt);
+                    }
+                    processPolling(elt, verb, getAttributeValue(elt, "hx-" + verb), spec);
                 }
-            }, interval);
+            }, spec.pollInterval);
         }
 
         function isLocalLink(elt) {
@@ -936,7 +978,7 @@ return (function () {
         }
 
         function boostElement(elt, nodeData, triggerSpecs) {
-            if ((elt.tagName === "A" && isLocalLink(elt)) || elt.tagName === "FORM") {
+            if ((elt.tagName === "A" && isLocalLink(elt) && elt.target === "") || elt.tagName === "FORM") {
                 nodeData.boosted = true;
                 var verb, path;
                 if (elt.tagName === "A") {
@@ -957,11 +999,20 @@ return (function () {
             }
         }
 
-        function shouldCancel(elt) {
-            return elt.tagName === "FORM" ||
-                (matches(elt, 'input[type="submit"], button') && closest(elt, 'form') !== null) ||
-                (elt.tagName === "A" && elt.href && (elt.getAttribute('href') === '#' ||
-                                                     elt.getAttribute('href').indexOf("#") !== 0));
+        function shouldCancel(evt, elt) {
+            if (evt.type === "submit" || evt.type === "click") {
+                if (elt.tagName === "FORM") {
+                    return true;
+                }
+                if (matches(elt, 'input[type="submit"], button') && closest(elt, 'form') !== null) {
+                    return true;
+                }
+                if (elt.tagName === "A" && elt.href &&
+                    (elt.getAttribute('href') === '#' || elt.getAttribute('href').indexOf("#") !== 0)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         function ignoreBoostedAnchorCtrlClick(elt, evt) {
@@ -982,86 +1033,90 @@ return (function () {
         }
 
         function addEventListener(elt, verb, path, nodeData, triggerSpec, explicitCancel) {
-            var eltToListenOn = elt;
+            var eltsToListenOn;
             if (triggerSpec.from) {
-                eltToListenOn = find(triggerSpec.from);
+                eltsToListenOn = querySelectorAllExt(elt, triggerSpec.from);
+            } else {
+                eltsToListenOn = [elt];
             }
-            var eventListener = function (evt) {
-                if (!bodyContains(elt)) {
-                    eltToListenOn.removeEventListener(triggerSpec.trigger, eventListener);
-                    return;
-                }
-                if (ignoreBoostedAnchorCtrlClick(elt, evt)) {
-                    return;
-                }
-                if(explicitCancel || shouldCancel(elt)){
-                    evt.preventDefault();
-                }
-                if (maybeFilterEvent(triggerSpec, evt)) {
-                    return;
-                }
-                var eventData = getInternalData(evt);
-                eventData.triggerSpec = triggerSpec;
-                if (eventData.handledFor == null) {
-                    eventData.handledFor = [];
-                }
-                var elementData = getInternalData(elt);
-                if (eventData.handledFor.indexOf(elt) < 0) {
-                    eventData.handledFor.push(elt);
-                    if (triggerSpec.consume) {
-                        evt.stopPropagation();
-                    }
-                    if (triggerSpec.target && evt.target) {
-                        if (!matches(evt.target, triggerSpec.target)) {
-                            return;
-                        }
-                    }
-                    if (triggerSpec.once) {
-                        if (elementData.triggeredOnce) {
-                            return;
-                        } else {
-                            elementData.triggeredOnce = true;
-                        }
-                    }
-                    if (triggerSpec.changed) {
-                        if (elementData.lastValue === elt.value) {
-                            return;
-                        } else {
-                            elementData.lastValue = elt.value;
-                        }
-                    }
-                    if (elementData.delayed) {
-                        clearTimeout(elementData.delayed);
-                    }
-                    if (elementData.throttle) {
+            forEach(eltsToListenOn, function (eltToListenOn) {
+                var eventListener = function (evt) {
+                    if (!bodyContains(elt)) {
+                        eltToListenOn.removeEventListener(triggerSpec.trigger, eventListener);
                         return;
                     }
-
-                    if (triggerSpec.throttle) {
-                        if(!elementData.throttle) {
-                            issueAjaxRequest(verb, path, elt, evt);
-                            elementData.throttle = setTimeout(function(){
-                                elementData.throttle = null;
-                            }, triggerSpec.throttle);
-                        }
-                    } else if (triggerSpec.delay) {
-                        elementData.delayed = setTimeout(function(){
-                            issueAjaxRequest(verb, path, elt, evt);
-                        }, triggerSpec.delay);
-                    } else {
-                        issueAjaxRequest(verb, path, elt, evt);
+                    if (ignoreBoostedAnchorCtrlClick(elt, evt)) {
+                        return;
                     }
+                    if (explicitCancel || shouldCancel(evt, elt)) {
+                        evt.preventDefault();
+                    }
+                    if (maybeFilterEvent(triggerSpec, evt)) {
+                        return;
+                    }
+                    var eventData = getInternalData(evt);
+                    eventData.triggerSpec = triggerSpec;
+                    if (eventData.handledFor == null) {
+                        eventData.handledFor = [];
+                    }
+                    var elementData = getInternalData(elt);
+                    if (eventData.handledFor.indexOf(elt) < 0) {
+                        eventData.handledFor.push(elt);
+                        if (triggerSpec.consume) {
+                            evt.stopPropagation();
+                        }
+                        if (triggerSpec.target && evt.target) {
+                            if (!matches(evt.target, triggerSpec.target)) {
+                                return;
+                            }
+                        }
+                        if (triggerSpec.once) {
+                            if (elementData.triggeredOnce) {
+                                return;
+                            } else {
+                                elementData.triggeredOnce = true;
+                            }
+                        }
+                        if (triggerSpec.changed) {
+                            if (elementData.lastValue === elt.value) {
+                                return;
+                            } else {
+                                elementData.lastValue = elt.value;
+                            }
+                        }
+                        if (elementData.delayed) {
+                            clearTimeout(elementData.delayed);
+                        }
+                        if (elementData.throttle) {
+                            return;
+                        }
+
+                        if (triggerSpec.throttle) {
+                            if (!elementData.throttle) {
+                                issueAjaxRequest(verb, path, elt, evt);
+                                elementData.throttle = setTimeout(function () {
+                                    elementData.throttle = null;
+                                }, triggerSpec.throttle);
+                            }
+                        } else if (triggerSpec.delay) {
+                            elementData.delayed = setTimeout(function () {
+                                issueAjaxRequest(verb, path, elt, evt);
+                            }, triggerSpec.delay);
+                        } else {
+                            issueAjaxRequest(verb, path, elt, evt);
+                        }
+                    }
+                };
+                if (nodeData.listenerInfos == null) {
+                    nodeData.listenerInfos = [];
                 }
-            };
-            if (nodeData.listenerInfos == null) {
-                nodeData.listenerInfos = [];
-            }
-            nodeData.listenerInfos.push({
-                trigger: triggerSpec.trigger,
-                listener: eventListener,
-                on: eltToListenOn
+                nodeData.listenerInfos.push({
+                    trigger: triggerSpec.trigger,
+                    listener: eventListener,
+                    on: eltToListenOn
+                })
+                eltToListenOn.addEventListener(triggerSpec.trigger, eventListener);
             })
-            eltToListenOn.addEventListener(triggerSpec.trigger, eventListener);
         }
 
         var windowIsScrolling = false // used by initScrollHandler
@@ -1084,9 +1139,9 @@ return (function () {
         }
 
         function maybeReveal(elt) {
-            var nodeData = getInternalData(elt);
-            if (!nodeData.revealed && isScrolledIntoView(elt)) {
-                nodeData.revealed = true;
+            if (!hasAttribute(elt,'data-hx-revealed') && isScrolledIntoView(elt)) {
+                elt.setAttribute('data-hx-revealed', 'true');
+                var nodeData = getInternalData(elt);
                 if (nodeData.initialized) {
                     issueAjaxRequest(nodeData.verb, nodeData.path, elt);
                 } else {
@@ -1132,7 +1187,7 @@ return (function () {
             };
 
             socket.onclose = function (e) {
-                if ([1006, 1012, 1013].includes(e.code)) {  // Abnormal Closure/Service Restart/Try Again Later
+                if ([1006, 1012, 1013].indexOf(e.code) >= 0) {  // Abnormal Closure/Service Restart/Try Again Later
                     var delay = getWebSocketReconnectDelay(retryCount);
                     setTimeout(function() {
                         ensureWebSocket(elt, wssSource, retryCount+1);  // creates a websocket with a new timeout
@@ -1193,7 +1248,7 @@ return (function () {
                         return;
                     }
                     webSocket.send(JSON.stringify(filteredParameters));
-                    if(shouldCancel(elt)){
+                    if(shouldCancel(evt, elt)){
                         evt.preventDefault();
                     }
                 });
@@ -1205,6 +1260,7 @@ return (function () {
         function getWebSocketReconnectDelay(retryCount) {
             var delay = htmx.config.wsReconnectDelay;
             if (typeof delay === 'function') {
+                // @ts-ignore
                 return delay(retryCount);
             }
             if (delay === 'full-jitter') {
@@ -1340,7 +1396,7 @@ return (function () {
                         } else if (triggerSpec.trigger === "intersect") {
                             var observerOptions = {};
                             if (triggerSpec.root) {
-                                observerOptions.root = querySelectorExt(triggerSpec.root)
+                                observerOptions.root = querySelectorExt(elt, triggerSpec.root)
                             }
                             if (triggerSpec.threshold) {
                                 observerOptions.threshold = parseFloat(triggerSpec.threshold);
@@ -1360,7 +1416,7 @@ return (function () {
                             loadImmediately(elt, verb, path, nodeData, triggerSpec.delay);
                         } else if (triggerSpec.pollInterval) {
                             nodeData.polling = true;
-                            processPolling(elt, verb, path, triggerSpec.pollInterval);
+                            processPolling(elt, verb, path, triggerSpec);
                         } else {
                             addEventListener(elt, verb, path, nodeData, triggerSpec);
                         }
@@ -1372,13 +1428,20 @@ return (function () {
 
         function evalScript(script) {
             if (script.type === "text/javascript" || script.type === "") {
+                var newScript = getDocument().createElement("script");
+                forEach(script.attributes, function (attr) {
+                    newScript.setAttribute(attr.name, attr.value);
+                });
+                newScript.textContent = script.textContent;
+                newScript.async = false;
+                var parent = script.parentElement;
+
                 try {
-                    maybeEval(script, function () {
-                        // wtf - https://stackoverflow.com/questions/9107240/1-evalthis-vs-evalthis-in-javascript
-                        (1, eval)(script.innerText);
-                    });
+                    parent.insertBefore(newScript, script);
                 } catch (e) {
                     logError(e);
+                } finally {
+                    parent.removeChild(script);
                 }
             }
         }
@@ -1400,11 +1463,31 @@ return (function () {
             if (elt.querySelectorAll) {
                 var boostedElts = isBoosted() ? ", a, form" : "";
                 var results = elt.querySelectorAll(VERB_SELECTOR + boostedElts + ", [hx-sse], [data-hx-sse], [hx-ws]," +
-                    " [data-hx-ws]");
+                    " [data-hx-ws], [hx-ext], [hx-data-ext]");
                 return results;
             } else {
                 return [];
             }
+        }
+
+        function initButtonTracking(form){
+            var maybeSetLastButtonClicked = function(evt){
+                if (matches(evt.target, "button, input[type='submit']")) {
+                    var internalData = getInternalData(form);
+                    internalData.lastButtonClicked = evt.target;
+                }
+            };
+
+            // need to handle both click and focus in:
+            //   focusin - in case someone tabs in to a button and hits the space bar
+            //   click - on OSX buttons do not focus on click see https://bugs.webkit.org/show_bug.cgi?id=13724
+
+            form.addEventListener('click', maybeSetLastButtonClicked)
+            form.addEventListener('focusin', maybeSetLastButtonClicked)
+            form.addEventListener('focusout', function(evt){
+                var internalData = getInternalData(form);
+                internalData.lastButtonClicked = null;
+            })
         }
 
         function initNode(elt) {
@@ -1425,6 +1508,10 @@ return (function () {
 
                 if (!explicitAction && getClosestAttributeValue(elt, "hx-boost") === "true") {
                     boostElement(elt, nodeData, triggerSpecs);
+                }
+
+                if (elt.tagName === "FORM") {
+                    initButtonTracking(elt);
                 }
 
                 var sseInfo = getAttributeValue(elt, 'hx-sse');
@@ -1520,7 +1607,7 @@ return (function () {
         //====================================================================
         // History Support
         //====================================================================
-        var currentPathForHistory = null;
+        var currentPathForHistory = location.pathname+location.search;
 
         function getHistoryElement() {
             var historyElt = getDocument().querySelector('[hx-history-elt],[data-hx-history-elt]');
@@ -1598,9 +1685,11 @@ return (function () {
                 if (this.status >= 200 && this.status < 400) {
                     triggerEvent(getDocument().body, "htmx:historyCacheMissLoad", details);
                     var fragment = makeFragment(this.response);
+                    // @ts-ignore
                     fragment = fragment.querySelector('[hx-history-elt],[data-hx-history-elt]') || fragment;
                     var historyElement = getHistoryElement();
                     var settleInfo = makeSettleInfo(historyElement);
+                    // @ts-ignore
                     swapInnerHTML(historyElement, fragment, settleInfo)
                     settleImmediately(settleInfo.tasks);
                     currentPathForHistory = path;
@@ -1770,6 +1859,15 @@ return (function () {
             // include the element itself
             processInputValue(processed, values, errors, elt, validate);
 
+            // if a button or submit was clicked last, include its value
+            var internalData = getInternalData(elt);
+            if (internalData.lastButtonClicked) {
+                var name = getRawAttribute(internalData.lastButtonClicked,"name");
+                if (name) {
+                    values[name] = internalData.lastButtonClicked.value;
+                }
+            }
+
             // include any explicit includes
             var includes = getClosestAttributeValue(elt, "hx-include");
             if (includes) {
@@ -1849,6 +1947,9 @@ return (function () {
             if (prompt !== undefined) {
                 headers["HX-Prompt"] = prompt;
             }
+            if (getInternalData(elt).boosted) {
+                headers["HX-Boosted"] = "true";
+            }
             return headers;
         }
 
@@ -1905,10 +2006,20 @@ return (function () {
                             swapSpec["settleDelay"] = parseInterval(modifier.substr(7));
                         }
                         if (modifier.indexOf("scroll:") === 0) {
-                            swapSpec["scroll"] = modifier.substr(7);
+                            var scrollSpec = modifier.substr(7);
+                            var splitSpec = scrollSpec.split(":");
+                            var scrollVal = splitSpec.pop();
+                            var selectorVal = splitSpec.length > 0 ? splitSpec.join(":") : null;
+                            swapSpec["scroll"] = scrollVal;
+                            swapSpec["scrollTarget"] = selectorVal;
                         }
                         if (modifier.indexOf("show:") === 0) {
-                            swapSpec["show"] = modifier.substr(5);
+                            var showSpec = modifier.substr(5);
+                            var splitSpec = showSpec.split(":");
+                            var showVal = splitSpec.pop();
+                            var selectorVal = splitSpec.length > 0 ? splitSpec.join(":") : null;
+                            swapSpec["show"] = showVal;
+                            swapSpec["showTarget"] = selectorVal;
                         }
                     }
                 }
@@ -1926,7 +2037,8 @@ return (function () {
             if (encodedParameters != null) {
                 return encodedParameters;
             } else {
-                if (getClosestAttributeValue(elt, "hx-encoding") === "multipart/form-data") {
+                if (getClosestAttributeValue(elt, "hx-encoding") === "multipart/form-data" ||
+                    (matches(elt, "form") && getRawAttribute(elt, 'enctype') === "multipart/form-data")) {
                     return makeFormData(filteredParameters);
                 } else {
                     return urlEncode(filteredParameters);
@@ -1942,19 +2054,35 @@ return (function () {
             var first = content[0];
             var last = content[content.length - 1];
             if (swapSpec.scroll) {
-                if (swapSpec.scroll === "top" && first) {
-                    first.scrollTop = 0;
+                var target = null;
+                if (swapSpec.scrollTarget) {
+                    target = querySelectorExt(first, swapSpec.scrollTarget);
                 }
-                if (swapSpec.scroll === "bottom" && last) {
-                    last.scrollTop = last.scrollHeight;
+                if (swapSpec.scroll === "top" && (first || target)) {
+                    target = target || first;
+                    target.scrollTop = 0;
+                }
+                if (swapSpec.scroll === "bottom" && (last || target)) {
+                    target = target || last;
+                    target.scrollTop = target.scrollHeight;
                 }
             }
             if (swapSpec.show) {
-                if (swapSpec.show === "top" && first) {
-                    first.scrollIntoView(true);
+                var target = null;
+                if (swapSpec.showTarget) {
+                    var targetStr = swapSpec.showTarget;
+                    if (swapSpec.showTarget === "window") {
+                        targetStr = "body";
+                    }
+                    target = querySelectorExt(first, targetStr);
                 }
-                if (swapSpec.show === "bottom" && last) {
-                    last.scrollIntoView(false);
+                if (swapSpec.show === "top" && (first || target)) {
+                    target = target || first;
+                    target.scrollIntoView({block:'start', behavior: htmx.config.scrollBehavior});
+                }
+                if (swapSpec.show === "bottom" && (last || target)) {
+                    target = target || last;
+                    target.scrollIntoView({block:'end', behavior: htmx.config.scrollBehavior});
                 }
             }
         }
@@ -1972,6 +2100,9 @@ return (function () {
                 var evaluateValue = evalAsDefault;
                 if (str.indexOf("javascript:") === 0) {
                     str = str.substr(11);
+                    evaluateValue = true;
+                } else if (str.indexOf("js:") === 0) {
+                    str = str.substr(3);
                     evaluateValue = true;
                 }
                 if (str.indexOf('{') !== 0) {
@@ -2044,10 +2175,12 @@ return (function () {
         }
 
         function ajaxHelper(verb, path, context) {
+            verb = verb.toLowerCase();
             if (context) {
                 if (context instanceof Element || isType(context, 'String')) {
                     return issueAjaxRequest(verb, path, null, null, {
-                        targetOverride: resolveTarget(context)
+                        targetOverride: resolveTarget(context),
+                        returnPromise: true
                     });
                 } else {
                     return issueAjaxRequest(verb, path, resolveTarget(context.source), context.event,
@@ -2055,11 +2188,14 @@ return (function () {
                             handler : context.handler,
                             headers : context.headers,
                             values : context.values,
-                            targetOverride: resolveTarget(context.target)
+                            targetOverride: resolveTarget(context.target),
+                            returnPromise: true
                         });
                 }
             } else {
-                return issueAjaxRequest(verb, path);
+                return issueAjaxRequest(verb, path, null, null, {
+                        returnPromise: true
+                });
             }
         }
 
@@ -2076,7 +2212,7 @@ return (function () {
             var resolve = null;
             var reject = null;
             etc = etc != null ? etc : {};
-            if(typeof Promise !== "undefined"){
+            if(etc.returnPromise && typeof Promise !== "undefined"){
                 var promise = new Promise(function (_resolve, _reject) {
                     resolve = _resolve;
                     reject = _reject;
@@ -2098,25 +2234,27 @@ return (function () {
             var eltData = getInternalData(elt);
             if (eltData.requestInFlight) {
                 var queueStrategy = 'last';
-                var eventData = getInternalData(event);
-                if (eventData && eventData.triggerSpec && eventData.triggerSpec.queue) {
-                    queueStrategy = eventData.triggerSpec.queue;
+                if (event) {
+                    var eventData = getInternalData(event);
+                    if (eventData && eventData.triggerSpec && eventData.triggerSpec.queue) {
+                        queueStrategy = eventData.triggerSpec.queue;
+                    }
                 }
                 if (eltData.queuedRequests == null) {
                     eltData.queuedRequests = [];
                 }
                 if (queueStrategy === "first" && eltData.queuedRequests.length === 0) {
                     eltData.queuedRequests.push(function () {
-                        issueAjaxRequest(verb, path, elt, event)
+                        issueAjaxRequest(verb, path, elt, event, etc)
                     });
                 } else if (queueStrategy === "all") {
                     eltData.queuedRequests.push(function () {
-                        issueAjaxRequest(verb, path, elt, event)
+                        issueAjaxRequest(verb, path, elt, event, etc)
                     });
                 } else if (queueStrategy === "last") {
                     eltData.queuedRequests = []; // dump existing queue
                     eltData.queuedRequests.push(function () {
-                        issueAjaxRequest(verb, path, elt, event)
+                        issueAjaxRequest(verb, path, elt, event, etc)
                     });
                 }
                 return;
@@ -2156,7 +2294,7 @@ return (function () {
 
             var headers = getHeaders(elt, target, promptResponse);
             if (etc.headers) {
-                headers = mergeObjects(headers, etc.values);
+                headers = mergeObjects(headers, etc.headers);
             }
             var results = getInputValues(elt, verb);
             var errors = results.errors;
@@ -2177,6 +2315,8 @@ return (function () {
                 path = getDocument().location.href;
             }
 
+            var requestAttrValues = getValuesForElement(elt, 'hx-request');
+
             var requestConfig = {
                 parameters: filteredParameters,
                 unfilteredParameters: allParameters,
@@ -2184,6 +2324,8 @@ return (function () {
                 target:target,
                 verb:verb,
                 errors:errors,
+                withCredentials: etc.credentials || requestAttrValues.credentials || htmx.config.withCredentials,
+                timeout:  etc.timeout || requestAttrValues.timeout || htmx.config.timeout,
                 path:path,
                 triggeringEvent:event
             };
@@ -2231,13 +2373,18 @@ return (function () {
             }
 
             xhr.overrideMimeType("text/html");
-            xhr.withCredentials = htmx.config.withCredentials;
+            xhr.withCredentials = requestConfig.withCredentials;
+            xhr.timeout = requestConfig.timeout;
 
             // request headers
-            for (var header in headers) {
-                if (headers.hasOwnProperty(header)) {
-                    var headerValue = headers[header];
-                    safelySetHeaderValue(xhr, header, headerValue);
+            if (requestAttrValues.noHeaders) {
+                // ignore all headers
+            } else {
+                for (var header in headers) {
+                    if (headers.hasOwnProperty(header)) {
+                        var headerValue = headers[header];
+                        safelySetHeaderValue(xhr, header, headerValue);
+                    }
                 }
             }
 
@@ -2286,6 +2433,13 @@ return (function () {
                 removeRequestIndicatorClasses(indicators);
                 triggerErrorEvent(elt, 'htmx:afterRequest', responseInfo);
                 triggerErrorEvent(elt, 'htmx:sendAbort', responseInfo);
+                maybeCall(reject);
+                endRequestLock();
+            }
+            xhr.ontimeout = function() {
+                removeRequestIndicatorClasses(indicators);
+                triggerErrorEvent(elt, 'htmx:afterRequest', responseInfo);
+                triggerErrorEvent(elt, 'htmx:timeout', responseInfo);
                 maybeCall(reject);
                 endRequestLock();
             }
@@ -2338,123 +2492,144 @@ return (function () {
                 }
             }
 
+            if (hasHeader(xhr,/HX-Retarget:/i)) {
+                responseInfo.target = getDocument().querySelector(xhr.getResponseHeader("HX-Retarget"));
+            }
+
             var shouldSaveHistory = shouldPush(elt) || pushedUrl;
 
-            if (xhr.status >= 200 && xhr.status < 400) {
+            // by default htmx only swaps on 200 return codes and does not swap
+            // on 204 'No Content'
+            // this can be ovverriden by responding to the htmx:beforeSwap event and
+            // overriding the detail.shouldSwap property
+            var shouldSwap = xhr.status >= 200 && xhr.status < 400 && xhr.status !== 204;
+            var serverResponse = xhr.response;
+            var isError = xhr.status >= 400;
+            var beforeSwapDetails = mergeObjects({shouldSwap: shouldSwap, serverResponse:serverResponse, isError:isError}, responseInfo);
+            if (!triggerEvent(target, 'htmx:beforeSwap', beforeSwapDetails)) return;
+
+            target = beforeSwapDetails.target; // allow re-targeting
+            serverResponse = beforeSwapDetails.serverResponse; // allow updating content
+            isError = beforeSwapDetails.isError; // allow updating error
+		
+            responseInfo.failed = isError; // Make failed property available to response events
+            responseInfo.successful = !isError; // Make successful property available to response events		
+
+            if (beforeSwapDetails.shouldSwap) {
                 if (xhr.status === 286) {
                     cancelPolling(elt);
                 }
-                // don't process 'No Content'
-                if (xhr.status !== 204) {
-                    if (!triggerEvent(target, 'htmx:beforeSwap', responseInfo)) return;
 
-                    var serverResponse = xhr.response;
-                    withExtensions(elt, function(extension){
-                        serverResponse = extension.transformResponse(serverResponse, xhr, elt);
-                    });
+                withExtensions(elt, function (extension) {
+                    serverResponse = extension.transformResponse(serverResponse, xhr, elt);
+                });
 
-                    // Save current page
-                    if (shouldSaveHistory) {
-                        saveHistory();
-                    }
+                // Save current page
+                if (shouldSaveHistory) {
+                    saveHistory();
+                }
 
-                    var swapSpec = getSwapSpecification(elt);
+                var swapSpec = getSwapSpecification(elt);
 
-                    target.classList.add(htmx.config.swappingClass);
-                    var doSwap = function () {
+                target.classList.add(htmx.config.swappingClass);
+                var doSwap = function () {
+                    try {
+
+                        var activeElt = document.activeElement;
+                        var selectionInfo = {};
                         try {
+                            selectionInfo = {
+                                elt: activeElt,
+                                // @ts-ignore
+                                start: activeElt ? activeElt.selectionStart : null,
+                                // @ts-ignore
+                                end: activeElt ? activeElt.selectionEnd : null
+                            };
+                        } catch (e) {
+                            // safari issue - see https://github.com/microsoft/playwright/issues/5894
+                        }
 
-                            var activeElt = document.activeElement;
-                            var selectionInfo = {};
-                            try {
-                                selectionInfo = {
-                                    elt: activeElt,
-                                    start: activeElt ? activeElt.selectionStart : null,
-                                    end: activeElt ? activeElt.selectionEnd : null
-                                };
-                            } catch (e) {
-                                 // safari issue - see https://github.com/microsoft/playwright/issues/5894
-                            }
+                        var settleInfo = makeSettleInfo(target);
+                        selectAndSwap(swapSpec.swapStyle, target, elt, serverResponse, settleInfo);
 
-                            var settleInfo = makeSettleInfo(target);
-                            selectAndSwap(swapSpec.swapStyle, target, elt, serverResponse, settleInfo);
-
-                            if (selectionInfo.elt &&
-                                !bodyContains(selectionInfo.elt) &&
-                                selectionInfo.elt.id) {
-                                var newActiveElt = document.getElementById(selectionInfo.elt.id);
-                                if (newActiveElt) {
-                                    if (selectionInfo.start && newActiveElt.setSelectionRange) {
-                                        newActiveElt.setSelectionRange(selectionInfo.start, selectionInfo.end);
-                                    }
-                                    newActiveElt.focus();
+                        if (selectionInfo.elt &&
+                            !bodyContains(selectionInfo.elt) &&
+                            selectionInfo.elt.id) {
+                            var newActiveElt = document.getElementById(selectionInfo.elt.id);
+                            if (newActiveElt) {
+                                // @ts-ignore
+                                if (selectionInfo.start && newActiveElt.setSelectionRange) {
+                                    // @ts-ignore
+                                    newActiveElt.setSelectionRange(selectionInfo.start, selectionInfo.end);
                                 }
+                                newActiveElt.focus();
                             }
+                        }
 
-                            target.classList.remove(htmx.config.swappingClass);
+                        target.classList.remove(htmx.config.swappingClass);
+                        forEach(settleInfo.elts, function (elt) {
+                            if (elt.classList) {
+                                elt.classList.add(htmx.config.settlingClass);
+                            }
+                            triggerEvent(elt, 'htmx:afterSwap', responseInfo);
+                        });
+                        if (responseInfo.pathInfo.anchor) {
+                            location.hash = responseInfo.pathInfo.anchor;
+                        }
+
+                        if (hasHeader(xhr, /HX-Trigger-After-Swap:/i)) {
+                            var finalElt = elt;
+                            if (!bodyContains(elt)) {
+                                finalElt = getDocument().body;
+                            }
+                            handleTrigger(xhr, "HX-Trigger-After-Swap", finalElt);
+                        }
+
+                        var doSettle = function () {
+                            forEach(settleInfo.tasks, function (task) {
+                                task.call();
+                            });
                             forEach(settleInfo.elts, function (elt) {
                                 if (elt.classList) {
-                                    elt.classList.add(htmx.config.settlingClass);
+                                    elt.classList.remove(htmx.config.settlingClass);
                                 }
-                                triggerEvent(elt, 'htmx:afterSwap', responseInfo);
+                                triggerEvent(elt, 'htmx:afterSettle', responseInfo);
                             });
-                            if (responseInfo.pathInfo.anchor) {
-                                location.hash = responseInfo.pathInfo.anchor;
+                            // push URL and save new page
+                            if (shouldSaveHistory) {
+                                var pathToPush = pushedUrl || getPushUrl(elt) || getResponseURL(xhr) || responseInfo.pathInfo.finalPath || responseInfo.pathInfo.path;
+                                pushUrlIntoHistory(pathToPush);
+                                triggerEvent(getDocument().body, 'htmx:pushedIntoHistory', {path: pathToPush});
                             }
+                            updateScrollState(settleInfo.elts, swapSpec);
 
-                            if (hasHeader(xhr, /HX-Trigger-After-Swap:/i)) {
+                            if (hasHeader(xhr, /HX-Trigger-After-Settle:/i)) {
                                 var finalElt = elt;
                                 if (!bodyContains(elt)) {
                                     finalElt = getDocument().body;
                                 }
-                                handleTrigger(xhr, "HX-Trigger-After-Swap", finalElt);
+                                handleTrigger(xhr, "HX-Trigger-After-Settle", finalElt);
                             }
-
-                            var doSettle = function(){
-                                forEach(settleInfo.tasks, function (task) {
-                                    task.call();
-                                });
-                                forEach(settleInfo.elts, function (elt) {
-                                    if (elt.classList) {
-                                        elt.classList.remove(htmx.config.settlingClass);
-                                    }
-                                    triggerEvent(elt, 'htmx:afterSettle', responseInfo);
-                                });
-                                // push URL and save new page
-                                if (shouldSaveHistory) {
-                                    var pathToPush = pushedUrl || getPushUrl(elt) || getResponseURL(xhr) || responseInfo.pathInfo.finalPath || responseInfo.pathInfo.path;
-                                    pushUrlIntoHistory(pathToPush);
-                                    triggerEvent(getDocument().body, 'htmx:pushedIntoHistory', {path:pathToPush});
-                                }
-                                updateScrollState(settleInfo.elts, swapSpec);
-
-                                if (hasHeader(xhr, /HX-Trigger-After-Settle:/i)) {
-                                    var finalElt = elt;
-                                    if (!bodyContains(elt)) {
-                                        finalElt = getDocument().body;
-                                    }
-                                    handleTrigger(xhr, "HX-Trigger-After-Settle", finalElt);
-                                }
-                            }
-
-                            if (swapSpec.settleDelay > 0) {
-                                setTimeout(doSettle, swapSpec.settleDelay)
-                            } else {
-                                doSettle();
-                            }
-                        } catch (e) {
-                            triggerErrorEvent(elt, 'htmx:swapError', responseInfo);
-                            throw e;
                         }
-                    };
 
-                    if (swapSpec.swapDelay > 0) {
-                        setTimeout(doSwap, swapSpec.swapDelay)
-                    } else {
-                        doSwap();
+                        if (swapSpec.settleDelay > 0) {
+                            setTimeout(doSettle, swapSpec.settleDelay)
+                        } else {
+                            doSettle();
+                        }
+                    } catch (e) {
+                        triggerErrorEvent(elt, 'htmx:swapError', responseInfo);
+                        throw e;
                     }
+                };
+
+                if (swapSpec.swapDelay > 0) {
+                    setTimeout(doSwap, swapSpec.swapDelay)
+                } else {
+                    doSwap();
                 }
-            } else {
+            }
+            if (isError) {
                 triggerErrorEvent(elt, 'htmx:responseError', mergeObjects({error: "Response Status Error Code " + xhr.status + " from " + responseInfo.pathInfo.path}, responseInfo));
             }
         }
@@ -2536,6 +2711,7 @@ return (function () {
         function getMetaConfig() {
             var element = getDocument().querySelector('meta[name="htmx-config"]');
             if (element) {
+                // @ts-ignore
                 return parseJSON(element.content);
             } else {
                 return null;

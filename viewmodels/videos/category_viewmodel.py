@@ -14,5 +14,7 @@ class CategoryViewModel(ViewModelBase):
 
         self.cat_name = cat_name
         self.category: Optional[Category] = video_service.category_by_name(cat_name)
-        self.rows = [list(row) for row in more_itertools.chunked(self.category.videos, 3)]
+        self.rows = [
+            list(row) for row in more_itertools.chunked(self.category.videos, 3)
+        ]
         self.Video = Video

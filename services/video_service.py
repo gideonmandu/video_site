@@ -5,7 +5,7 @@ from typing import List, Dict, Optional
 from models.category_model import Category
 from models.video_model import Video
 
-__categories: Dict['str', Category] = {}
+__categories: Dict["str", Category] = {}
 __all_videos_list: List[Video] = []
 
 
@@ -15,14 +15,11 @@ def load_data():
     __categories = {}
     __all_videos_list = []
 
-    file = Path(__file__).parent.parent / 'db' / 'videos.json'
-    with open(file, 'r') as fin:
+    file = Path(__file__).parent.parent / "db" / "videos.json"
+    with open(file, "r") as fin:
         data = json.load(fin)
 
-    categories = [
-        Category(**category)
-        for category in data
-    ]
+    categories = [Category(**category) for category in data]
 
     for c in categories:
         __categories[c.category.lower().strip()] = c
@@ -35,11 +32,7 @@ def load_data():
 def rebuild_flat_file_list():
     global __all_videos_list
 
-    flat_set = {
-        v.id: v
-        for cat_name, cat in __categories.items()
-        for v in cat.videos
-    }
+    flat_set = {v.id: v for cat_name, cat in __categories.items() for v in cat.videos}
     # pprint(flat_set)
     __all_videos_list = list(flat_set.values())
     __all_videos_list.sort(key=lambda vid: vid.views, reverse=True)
@@ -62,7 +55,7 @@ def all_videos(page: int = 1, page_size: Optional[int] = None) -> List[Video]:
     if page_size:
         start = page_size * (page - 1)
         end = start + page_size
-        videos = videos[start: end]
+        videos = videos[start:end]
 
     return videos
 
@@ -108,8 +101,15 @@ def add_video(cat_name: str, youtube_id: str, title: str, author: str, view_coun
     if not cat:
         return None
 
-    url = f'https://www.youtube.com/watch?v={youtube_id}'
-    v = Video(id=youtube_id, title=title, url=url, author=author, views=view_count, category=cat.category)
+    url = f"https://www.youtube.com/watch?v={youtube_id}"
+    v = Video(
+        id=youtube_id,
+        title=title,
+        url=url,
+        author=author,
+        views=view_count,
+        category=cat.category,
+    )
     cat.videos.append(v)
 
     rebuild_flat_file_list()
